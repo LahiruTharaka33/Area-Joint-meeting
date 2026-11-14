@@ -101,9 +101,28 @@ CREATE TABLE IF NOT EXISTS login_fails (
 
 const g = globalThis as unknown as { __bmQuery?: Promise<QueryFn> };
 
+/**
+ * Find the Postgres URL. Vercel's Neon integration may add a prefix
+ * (e.g. STORAGE_DATABASE_URL), so look for those too.
+ */
+function databaseUrl(): string | undefined {
+  const env = process.env;
+  if (env.DATABASE_URL) return env.DATABASE_URL;
+  if (env.POSTGRES_URL) return env.POSTGRES_URL;
+  const key = Object.keys(env).find(k => /(^|_)DATABASE_URL$/.test(k) && !/UNPOOLED/.test(k))
+    ?? Object.keys(env).find(k => /(^|_)POSTGRES_URL$/.test(k));
+  return key ? env[key] : undefined;
+}
+
 async function connect(): Promise<QueryFn> {
-  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  const url = databaseUrl();
   let q: QueryFn;
+  if (!url && process.env.VERCEL) {
+    throw new Error(
+      'DATABASE_URL is not set. In Vercel open Settings → Environment Variables, add DATABASE_URL ' +
+      '(your Neon connection string) for Production, then redeploy.',
+    );
+  }
   if (url) {
     const { neon } = await import('@neondatabase/serverless');
     const sql = neon(url);
