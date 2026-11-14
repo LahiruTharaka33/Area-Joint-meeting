@@ -5,10 +5,13 @@ import path from 'path';
  * - On Vercel (or anywhere with DATABASE_URL / POSTGRES_URL set): Neon serverless driver.
  * - Locally without a URL: an embedded Postgres (PGlite) saved in ./data/pglite,
  *   so `npm run dev` works with no setup.
- * Tables are created automatically on first use.
+ * Tables are created (and new columns added) automatically on first use.
  */
 
+/** Status of the latest slip check. */
 export type PaymentStatus = 'none' | 'submitted' | 'verified' | 'rejected';
+
+export type SlipMeta = { id: string; contentType: string; reference: string; uploadedAt: string };
 
 export type Member = {
   id: string;
@@ -21,18 +24,21 @@ export type Member = {
   going: boolean | null;
   /** people coming with the member on the going bus (not counting the member) */
   goingGuests: number;
+  /** staying at the booked place with the going group (default yes) */
+  staying: boolean;
   returning: boolean | null;
   returnGuests: number;
   updatedAt: string | null;
-  /** organiser can set a custom amount for this member */
+  /** organiser can set a custom full price for this member */
   amountOverride: number | null;
+  /** organiser can set a custom advance for this member */
+  advanceOverride: number | null;
+  /** total money received from this member, set by the organiser */
+  paidAmount: number;
   payment: {
     status: PaymentStatus;
-    hasSlip: boolean;
-    slipType: string | null;
-    uploadedAt: string | null;
-    reference: string;
     adminNote: string;
+    slips: SlipMeta[];
   };
 };
 
@@ -43,6 +49,8 @@ export type Settings = {
   returnLabel: string;
   /** per person, in rupees */
   rates: { going: number; stay: number; return: number };
+  /** advance to pay now, per person, in rupees (0 = no advance, pay the full price) */
+  advancePerPerson: number;
   bank: { accountName: string; bankName: string; branch: string; accountNumber: string; note: string };
   headcountLocked: boolean;
 };
@@ -53,6 +61,7 @@ export const defaultSettings = (): Settings => ({
   stayLabel: '5th morning stay',
   returnLabel: '5th night bus',
   rates: { going: 0, stay: 0, return: 0 },
+  advancePerPerson: 0,
   bank: { accountName: '', bankName: '', branch: '', accountNumber: '', note: '' },
   headcountLocked: false,
 });
@@ -82,12 +91,18 @@ CREATE TABLE IF NOT EXISTS members (
   slip_type       text,
   slip_uploaded_at timestamptz
 );
-CREATE TABLE IF NOT EXISTS slips (
-  member_id   text PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+ALTER TABLE members ADD COLUMN IF NOT EXISTS is_staying boolean NOT NULL DEFAULT true;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS advance_override double precision;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS paid_amount double precision NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS payment_slips (
+  id           text PRIMARY KEY,
+  member_id    text NOT NULL REFERENCES members(id) ON DELETE CASCADE,
   content_type text NOT NULL,
-  data_b64    text NOT NULL,
-  uploaded_at timestamptz NOT NULL DEFAULT now()
+  data_b64     text NOT NULL,
+  reference    text NOT NULL DEFAULT '',
+  uploaded_at  timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS payment_slips_member ON payment_slips (member_id);
 CREATE TABLE IF NOT EXISTS settings (
   id   integer PRIMARY KEY,
   data jsonb NOT NULL
@@ -154,10 +169,20 @@ async function query(text: string, params?: unknown[]) {
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
-const MEMBER_COLS = `id, name, phone, club, pin_hash, created_at, is_going, going_guests, is_returning,
-  return_guests, updated_at, amount_override, pay_status, pay_reference, admin_note, slip_type, slip_uploaded_at`;
+const MEMBER_COLS = `id, name, phone, club, pin_hash, created_at, is_going, going_guests, is_staying, is_returning,
+  return_guests, updated_at, amount_override, advance_override, paid_amount, pay_status, admin_note`;
+const SLIP_COLS = 'id, member_id, content_type, reference, uploaded_at';
 
-function toMember(r: Row): Member {
+function toSlip(r: Row): SlipMeta {
+  return {
+    id: r.id as string,
+    contentType: r.content_type as string,
+    reference: (r.reference as string) ?? '',
+    uploadedAt: iso(r.uploaded_at) ?? '',
+  };
+}
+
+function toMember(r: Row, slips: SlipMeta[] = []): Member {
   return {
     id: r.id as string,
     name: r.name as string,
@@ -167,17 +192,17 @@ function toMember(r: Row): Member {
     createdAt: iso(r.created_at) ?? '',
     going: (r.is_going as boolean | null) ?? null,
     goingGuests: Number(r.going_guests ?? 0),
+    staying: r.is_staying !== false,
     returning: (r.is_returning as boolean | null) ?? null,
     returnGuests: Number(r.return_guests ?? 0),
     updatedAt: iso(r.updated_at),
     amountOverride: num(r.amount_override),
+    advanceOverride: num(r.advance_override),
+    paidAmount: Number(r.paid_amount ?? 0),
     payment: {
       status: (r.pay_status as PaymentStatus) ?? 'none',
-      hasSlip: !!r.slip_type,
-      slipType: (r.slip_type as string | null) ?? null,
-      uploadedAt: iso(r.slip_uploaded_at),
-      reference: (r.pay_reference as string) ?? '',
       adminNote: (r.admin_note as string) ?? '',
+      slips,
     },
   };
 }
@@ -202,8 +227,17 @@ export async function saveSettings(s: Settings) {
 /* ---------------- members ---------------- */
 
 export async function listMembers(): Promise<Member[]> {
-  const rows = await query(`SELECT ${MEMBER_COLS} FROM members ORDER BY club, name`);
-  return rows.map(toMember);
+  const [rows, slipRows] = await Promise.all([
+    query(`SELECT ${MEMBER_COLS} FROM members ORDER BY club, name`),
+    query(`SELECT ${SLIP_COLS} FROM payment_slips ORDER BY uploaded_at`),
+  ]);
+  const byMember = new Map<string, SlipMeta[]>();
+  for (const r of slipRows) {
+    const list = byMember.get(r.member_id as string) ?? [];
+    list.push(toSlip(r));
+    byMember.set(r.member_id as string, list);
+  }
+  return rows.map(r => toMember(r, byMember.get(r.id as string)));
 }
 
 export async function readDb() {
@@ -211,14 +245,18 @@ export async function readDb() {
   return { settings, members };
 }
 
+async function withSlips(rows: Row[]): Promise<Member | null> {
+  if (!rows[0]) return null;
+  const slips = await query(`SELECT ${SLIP_COLS} FROM payment_slips WHERE member_id = $1 ORDER BY uploaded_at`, [rows[0].id]);
+  return toMember(rows[0], slips.map(toSlip));
+}
+
 export async function getMember(id: string): Promise<Member | null> {
-  const rows = await query(`SELECT ${MEMBER_COLS} FROM members WHERE id = $1`, [id]);
-  return rows[0] ? toMember(rows[0]) : null;
+  return withSlips(await query(`SELECT ${MEMBER_COLS} FROM members WHERE id = $1`, [id]));
 }
 
 export async function getMemberByPhone(phone: string): Promise<Member | null> {
-  const rows = await query(`SELECT ${MEMBER_COLS} FROM members WHERE phone = $1`, [phone]);
-  return rows[0] ? toMember(rows[0]) : null;
+  return withSlips(await query(`SELECT ${MEMBER_COLS} FROM members WHERE phone = $1`, [phone]));
 }
 
 /** Returns false when the phone number is already registered. */
@@ -233,21 +271,28 @@ export async function createMember(m: { id: string; name: string; phone: string;
 
 export async function updateHeadcount(
   id: string,
-  h: { going: boolean; goingGuests: number; returning: boolean; returnGuests: number },
+  h: { going: boolean; goingGuests: number; staying: boolean; returning: boolean; returnGuests: number },
 ) {
   await query(
-    `UPDATE members SET is_going = $2, going_guests = $3, is_returning = $4, return_guests = $5, updated_at = now()
+    `UPDATE members SET is_going = $2, going_guests = $3, is_staying = $4, is_returning = $5, return_guests = $6,
+       updated_at = now()
      WHERE id = $1`,
-    [id, h.going, h.goingGuests, h.returning, h.returnGuests],
+    [id, h.going, h.goingGuests, h.staying, h.returning, h.returnGuests],
   );
 }
 
-export async function setPayment(id: string, status: PaymentStatus, adminNote: string) {
-  await query('UPDATE members SET pay_status = $2, admin_note = $3 WHERE id = $1', [id, status, adminNote]);
+export async function recordPayment(id: string, status: PaymentStatus, paidAmount: number | null, adminNote: string) {
+  if (paidAmount === null) {
+    await query('UPDATE members SET pay_status = $2, admin_note = $3 WHERE id = $1', [id, status, adminNote]);
+  } else {
+    await query('UPDATE members SET pay_status = $2, admin_note = $3, paid_amount = $4 WHERE id = $1', [
+      id, status, adminNote, paidAmount,
+    ]);
+  }
 }
 
-export async function setAmountOverride(id: string, amount: number | null) {
-  await query('UPDATE members SET amount_override = $2 WHERE id = $1', [id, amount]);
+export async function setOverrides(id: string, amount: number | null, advance: number | null) {
+  await query('UPDATE members SET amount_override = $2, advance_override = $3 WHERE id = $1', [id, amount, advance]);
 }
 
 export async function setPinHash(id: string, pinHash: string) {
@@ -255,29 +300,28 @@ export async function setPinHash(id: string, pinHash: string) {
 }
 
 export async function deleteMember(id: string) {
-  await query('DELETE FROM slips WHERE member_id = $1', [id]);
+  await query('DELETE FROM payment_slips WHERE member_id = $1', [id]);
   await query('DELETE FROM members WHERE id = $1', [id]);
 }
 
 /* ---------------- slips ---------------- */
 
-export async function saveSlip(id: string, contentType: string, data: Buffer, reference: string) {
+export async function addSlip(memberId: string, slipId: string, contentType: string, data: Buffer, reference: string) {
   await query(
-    `INSERT INTO slips (member_id, content_type, data_b64, uploaded_at) VALUES ($1, $2, $3, now())
-     ON CONFLICT (member_id) DO UPDATE SET content_type = EXCLUDED.content_type, data_b64 = EXCLUDED.data_b64, uploaded_at = now()`,
-    [id, contentType, data.toString('base64')],
+    `INSERT INTO payment_slips (id, member_id, content_type, data_b64, reference) VALUES ($1, $2, $3, $4, $5)`,
+    [slipId, memberId, contentType, data.toString('base64'), reference],
   );
-  await query(
-    `UPDATE members SET pay_status = 'submitted', slip_type = $2, slip_uploaded_at = now(), pay_reference = $3
-     WHERE id = $1`,
-    [id, contentType, reference],
-  );
+  await query(`UPDATE members SET pay_status = 'submitted' WHERE id = $1`, [memberId]);
 }
 
-export async function getSlip(id: string): Promise<{ contentType: string; data: Buffer } | null> {
-  const rows = await query('SELECT content_type, data_b64 FROM slips WHERE member_id = $1', [id]);
+export async function getSlip(slipId: string): Promise<{ memberId: string; contentType: string; data: Buffer } | null> {
+  const rows = await query('SELECT member_id, content_type, data_b64 FROM payment_slips WHERE id = $1', [slipId]);
   if (!rows[0]) return null;
-  return { contentType: rows[0].content_type as string, data: Buffer.from(rows[0].data_b64 as string, 'base64') };
+  return {
+    memberId: rows[0].member_id as string,
+    contentType: rows[0].content_type as string,
+    data: Buffer.from(rows[0].data_b64 as string, 'base64'),
+  };
 }
 
 /* ---------------- login brake ---------------- */

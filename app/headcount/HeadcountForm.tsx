@@ -4,7 +4,7 @@ import { useActionState, useState } from 'react';
 import { saveHeadcount } from '../actions';
 
 type Props = {
-  initial: { going: boolean | null; goingGuests: number; returning: boolean | null; returnGuests: number };
+  initial: { going: boolean | null; goingGuests: number; staying: boolean; returning: boolean | null; returnGuests: number };
   goingLabel: string;
   stayLabel: string;
   returnLabel: string;
@@ -42,6 +42,7 @@ export default function HeadcountForm({ initial, goingLabel, stayLabel, returnLa
   const [state, action, pending] = useActionState(saveHeadcount, undefined);
   const [going, setGoing] = useState(yn(initial.going));
   const [goingGuests, setGoingGuests] = useState(initial.goingGuests);
+  const [staying, setStaying] = useState(initial.staying);
   const [returning, setReturning] = useState(yn(initial.returning));
   const [sameAsGoing, setSameAsGoing] = useState(
     initial.returning === null || !initial.going || initial.returnGuests === initial.goingGuests,
@@ -54,6 +55,7 @@ export default function HeadcountForm({ initial, goingLabel, stayLabel, returnLa
     <form action={action} style={{ display: 'grid', gap: 14 }}>
       <input type="hidden" name="goingGuests" value={goingGuests} />
       <input type="hidden" name="returnGuests" value={effectiveReturnGuests} />
+      <input type="hidden" name="staying" value={staying ? 'yes' : 'no'} />
 
       <div className="q">
         <div className="q-title">Are you going on the {goingLabel}?</div>
@@ -69,10 +71,25 @@ export default function HeadcountForm({ initial, goingLabel, stayLabel, returnLa
               <span>Going: you + {goingGuests}</span>
               <span>{people(1 + goingGuests)}</span>
             </div>
-            <p className="muted small">The same {people(1 + goingGuests)} will be counted for the {stayLabel}.</p>
           </>
         )}
       </div>
+
+      {going === 'yes' && (
+        <div className="q">
+          <div className="q-title">Staying at the booked place ({stayLabel})?</div>
+          <label className="switch">
+            <input type="checkbox" checked={staying} disabled={locked} onChange={e => setStaying(e.target.checked)} />
+            <span className="track" aria-hidden="true"><span className="thumb" /></span>
+            <span>{staying ? `Yes, all ${people(1 + goingGuests)} will stay there` : 'No, we will stay somewhere else'}</span>
+          </label>
+          <p className="muted small">
+            {staying
+              ? 'Everyone going on the bus is counted for the booked place.'
+              : 'Your group will not be counted or charged for the booked place.'}
+          </p>
+        </div>
+      )}
 
       <div className="q">
         <div className="q-title">Are you coming back on the {returnLabel}?</div>

@@ -1,21 +1,13 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireMember } from '@/lib/auth';
-import { readDb } from '@/lib/db';
-import { amountDue, breakdown, groupSizes, rs } from '@/lib/calc';
+import { getSettings } from '@/lib/db';
+import { breakdown, groupSizes, paySummary, PAY_STATE_LABEL, rs } from '@/lib/calc';
 import { logout } from '../actions';
 import SlipUpload from './SlipUpload';
 import CopyButton from './CopyButton';
 
 export const dynamic = 'force-dynamic';
-
-const STATUS_TEXT = {
-  none: 'Not paid yet. Pay to the account below and upload your slip.',
-  submitted: 'Slip received. Waiting for the organiser to check it.',
-  verified: 'Payment confirmed. Thank you!',
-  rejected: 'Your slip was not accepted. Please check and upload again.',
-} as const;
-const STATUS_PILL = { none: 'Not paid', submitted: 'Checking', verified: 'Paid', rejected: 'Not accepted' } as const;
 
 const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`;
 
@@ -23,9 +15,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const me = await requireMember();
   if (me.going === null) redirect('/headcount');
   const { saved } = await searchParams;
-  const { settings: s } = await readDb();
+  const s = await getSettings();
   const g = groupSizes(me);
-  const due = amountDue(me, s);
+  const pay = paySummary(me, s);
   const lines = breakdown(me, s);
   const bank = s.bank;
   const bankRows = [
@@ -34,7 +26,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     ['Branch', bank.branch],
     ['Account number', bank.accountNumber],
   ].filter(([, v]) => v);
-  const paymentReady = due > 0;
+  const waiting = me.payment.status === 'submitted';
+  const rejected = me.payment.status === 'rejected';
+  const nextIsAdvance = pay.advance > 0 && pay.paid < pay.advance;
+
+  const pill = waiting ? ['submitted', 'Checking'] : rejected ? ['rejected', 'Not accepted']
+    : pay.state === 'full' ? ['verified', 'Fully paid']
+    : pay.state === 'advance' ? ['verified', 'Advance paid']
+    : ['none', PAY_STATE_LABEL[pay.state]];
 
   return (
     <>
@@ -68,7 +67,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
               </tr>
               <tr>
                 <td>{s.stayLabel}</td>
-                <td>Same as going</td>
+                <td>{!me.going ? '–' : me.staying ? 'At the booked place' : 'Staying elsewhere'}</td>
                 <td><strong>{people(g.stay)}</strong></td>
               </tr>
               <tr>
@@ -84,42 +83,79 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <section className="card" aria-labelledby="pay">
           <div className="card-head">
             <h2 id="pay">Payment details</h2>
-            {paymentReady && <span className={`pill ${me.payment.status}`}>{STATUS_PILL[me.payment.status]}</span>}
+            {pay.full > 0 && <span className={`pill ${pill[0]}`}>{pill[1]}</span>}
           </div>
 
-          {!paymentReady ? (
+          {pay.full <= 0 ? (
             <p className="muted">
-              The organiser will add the amount to pay and the bank details here after taking the full headcount.
+              The organiser will add the price and the bank details here after taking the full headcount.
               Please check back later.
             </p>
           ) : (
             <>
-              <div>
-                <div className="muted small">Amount to pay</div>
-                <div className="amount">{rs(due)}</div>
+              <div className="money">
+                <div className="money-row">
+                  <span className="lbl">Full price</span>
+                  <span className="val">{rs(pay.full)}</span>
+                </div>
+                {pay.advance > 0 && pay.advance < pay.full && (
+                  <div className="money-row">
+                    <span className="lbl">Advance to confirm your seats</span>
+                    <span className="val">{rs(pay.advance)}</span>
+                  </div>
+                )}
+                {pay.paid > 0 && (
+                  <div className="money-row">
+                    <span className="lbl">Paid so far</span>
+                    <span className="val">{rs(pay.paid)}</span>
+                  </div>
+                )}
+                <div className="money-row">
+                  <span className="lbl">Balance</span>
+                  <span className="val">{rs(pay.balance)}</span>
+                </div>
+                {pay.payNow > 0 && (
+                  <div className="money-row now">
+                    <span className="lbl">{nextIsAdvance ? 'Pay now (advance)' : 'Pay the balance'}</span>
+                    <span className="val">{rs(pay.payNow)}</span>
+                  </div>
+                )}
               </div>
 
               {me.amountOverride === null && lines.length > 0 && (
-                <table className="lines">
-                  <tbody>
-                    {lines.map(l => (
-                      <tr key={l.label}>
-                        <td>{l.label}</td>
-                        <td>{l.people} × {rs(l.rate)}</td>
-                        <td>{rs(l.people * l.rate)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <details>
+                  <summary className="muted small" style={{ cursor: 'pointer' }}>How the full price is worked out</summary>
+                  <table className="lines" style={{ marginTop: 8 }}>
+                    <tbody>
+                      {lines.map(l => (
+                        <tr key={l.label}>
+                          <td>{l.label}</td>
+                          <td>{l.people} × {rs(l.rate)}</td>
+                          <td>{rs(l.people * l.rate)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
               )}
-              {me.amountOverride !== null && <p className="muted small">Amount set by the organiser.</p>}
+              {me.amountOverride !== null && <p className="muted small">Price set by the organiser for your group.</p>}
 
-              <div className={`alert ${me.payment.status === 'verified' ? 'ok' : me.payment.status === 'rejected' ? 'error' : 'info'}`}>
-                {STATUS_TEXT[me.payment.status]}
+              <div className={`alert ${pay.state === 'full' ? 'ok' : rejected ? 'error' : 'info'}`}>
+                {waiting
+                  ? 'Slip received. Waiting for the organiser to check it.'
+                  : rejected
+                    ? 'Your last slip was not accepted. Please check and upload again.'
+                    : pay.state === 'full'
+                      ? 'Fully paid. Thank you!'
+                      : pay.state === 'advance'
+                        ? `Advance received. Please pay the balance of ${rs(pay.balance)} before the trip.`
+                        : nextIsAdvance
+                          ? `Pay the advance of ${rs(pay.payNow)} to confirm your seats. The balance can be paid later.`
+                          : `Please pay ${rs(pay.payNow)}.`}
                 {me.payment.adminNote && <><br />Note from organiser: {me.payment.adminNote}</>}
               </div>
 
-              {me.payment.status !== 'verified' && (
+              {pay.balance > 0 && (
                 <>
                   <h3>Pay to this account</h3>
                   {bankRows.length === 0 ? (
@@ -138,15 +174,22 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
                       {bank.note && <p className="muted small">{bank.note}</p>}
                     </div>
                   )}
-                  <SlipUpload again={me.payment.status !== 'none'} />
+                  <SlipUpload again={me.payment.slips.length > 0} />
                 </>
               )}
 
-              {me.payment.hasSlip && (
-                <p className="small">
-                  <a href={`/api/slip/${me.id}`} target="_blank" rel="noreferrer">View the slip you uploaded</a>
-                  {me.payment.uploadedAt && <span className="muted"> · {new Date(me.payment.uploadedAt).toLocaleString('en-GB')}</span>}
-                </p>
+              {me.payment.slips.length > 0 && (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <h3>Your slips</h3>
+                  <ul className="slip-list small">
+                    {me.payment.slips.map((sl, i) => (
+                      <li key={sl.id}>
+                        <a href={`/api/slip/${sl.id}`} target="_blank" rel="noreferrer">Slip {i + 1}</a>
+                        <span className="muted"> · {new Date(sl.uploadedAt).toLocaleString('en-GB')}{sl.reference && ` · ${sl.reference}`}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </>
           )}

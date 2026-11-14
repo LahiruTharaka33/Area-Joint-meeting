@@ -135,6 +135,33 @@ input:focus, textarea:focus, select:focus, button:focus-visible, .choice input:f
 .check { display: flex; gap: 10px; align-items: center; font-weight: 500; }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); }
 
+/* On/off switch */
+.switch { display: flex; align-items: center; gap: 12px; cursor: pointer; font-weight: 600; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .track {
+  flex: 0 0 auto; width: 50px; height: 30px; border-radius: 999px; background: var(--line);
+  position: relative; transition: background .15s;
+}
+.switch .thumb {
+  position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s;
+}
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track .thumb { transform: translateX(20px); }
+.switch input:focus-visible + .track { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: .5; }
+
+/* Money summary */
+.money { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.money-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 10px 14px; font-variant-numeric: tabular-nums; }
+.money-row + .money-row { border-top: 1px solid var(--line); }
+.money-row .lbl { color: var(--muted); font-size: .92rem; }
+.money-row .val { font-weight: 700; white-space: nowrap; }
+.money-row.now { background: var(--accent-soft); }
+.money-row.now .lbl { color: var(--accent); font-weight: 700; }
+.money-row.now .val { font-size: 1.6rem; font-weight: 800; color: var(--accent); }
+.slip-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
 .alert { padding: 10px 12px; border-radius: 10px; font-size: .93rem; }
 .alert.error { background: var(--bad-soft); color: var(--bad); }
 .alert.ok { background: var(--ok-soft); color: var(--ok); }

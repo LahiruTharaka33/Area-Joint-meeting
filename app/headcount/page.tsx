@@ -30,7 +30,7 @@ export default async function HeadcountPage() {
         <section className="card" aria-labelledby="hc">
           <h2 id="hc">Your headcount</h2>
           <HeadcountForm
-            initial={{ going: me.going, goingGuests: me.goingGuests, returning: me.returning, returnGuests: me.returnGuests }}
+            initial={{ going: me.going, goingGuests: me.goingGuests, staying: me.staying, returning: me.returning, returnGuests: me.returnGuests }}
             goingLabel={s.goingLabel}
             stayLabel={s.stayLabel}
             returnLabel={s.returnLabel}

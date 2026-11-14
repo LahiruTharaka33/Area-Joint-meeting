@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import * as store from '@/lib/db';
 import { normalizePhone, type PaymentStatus } from '@/lib/db';
-import { amountDue } from '@/lib/calc';
+import { paySummary } from '@/lib/calc';
 import { setSession, clearSession, getSession, hashPin, verifyPin, checkAdminPassword, requireAdmin } from '@/lib/auth';
 
 export type FormState = { error?: string; ok?: string } | undefined;
@@ -81,6 +81,7 @@ export async function saveHeadcount(_: FormState, fd: FormData): Promise<FormSta
   await store.updateHeadcount(id, {
     going: going === 'yes',
     goingGuests: going === 'yes' ? int(fd, 'goingGuests') : 0,
+    staying: going === 'yes' ? str(fd, 'staying') !== 'no' : true,
     returning: returning === 'yes',
     returnGuests: returning === 'yes' ? int(fd, 'returnGuests') : 0,
   });
@@ -101,10 +102,12 @@ export async function uploadSlip(_: FormState, fd: FormData): Promise<FormState>
 
   const [current, settings] = await Promise.all([store.getMember(id), store.getSettings()]);
   if (!current) return { error: 'Your account was not found.' };
-  if (amountDue(current, settings) <= 0) return { error: 'Payment details are not ready yet.' };
-  if (current.payment.status === 'verified') return { error: 'Your payment is already confirmed.' };
+  const pay = paySummary(current, settings);
+  if (pay.full <= 0) return { error: 'Payment details are not ready yet.' };
+  if (pay.balance <= 0) return { error: 'You have already paid the full amount.' };
+  if (current.payment.slips.length >= 10) return { error: 'Too many slips uploaded. Please contact the organiser.' };
 
-  await store.saveSlip(id, file.type, Buffer.from(await file.arrayBuffer()), str(fd, 'reference').slice(0, 200));
+  await store.addSlip(id, crypto.randomUUID(), file.type, Buffer.from(await file.arrayBuffer()), str(fd, 'reference').slice(0, 200));
   revalidatePath('/', 'layout');
   return { ok: 'Slip uploaded. The organiser will check it and confirm.' };
 }
@@ -136,6 +139,7 @@ export async function saveSettings(fd: FormData) {
   s.stayLabel = str(fd, 'stayLabel') || s.stayLabel;
   s.returnLabel = str(fd, 'returnLabel') || s.returnLabel;
   s.rates = { going: money(fd, 'rateGoing'), stay: money(fd, 'rateStay'), return: money(fd, 'rateReturn') };
+  s.advancePerPerson = money(fd, 'advancePerPerson');
   s.bank = {
     accountName: str(fd, 'accountName'),
     bankName: str(fd, 'bankName'),
@@ -149,12 +153,24 @@ export async function saveSettings(fd: FormData) {
   redirect('/admin?msg=settings#payment-details');
 }
 
+export async function receivePayment(fd: FormData) {
+  fd.set('status', 'verified');
+  return setPaymentStatus(fd);
+}
+
+export async function rejectSlip(fd: FormData) {
+  fd.set('status', 'rejected');
+  return setPaymentStatus(fd);
+}
+
 export async function setPaymentStatus(fd: FormData) {
   await requireAdmin();
   const id = str(fd, 'id');
   const status = str(fd, 'status') as PaymentStatus;
-  if (!['none', 'submitted', 'verified', 'rejected'].includes(status)) return;
-  await store.setPayment(id, status, str(fd, 'adminNote').slice(0, 300));
+  if (!['none', 'submitted', 'verified', 'rejected'].includes(status)) redirect(`/admin#m-${id}`);
+  // "Save received" stores the total received; reject / reset leave it unchanged.
+  const paid = status === 'verified' ? money(fd, 'paidAmount') : null;
+  await store.recordPayment(id, status, paid, str(fd, 'adminNote').slice(0, 300));
   revalidatePath('/', 'layout');
   redirect(`/admin?msg=payment#m-${id}`);
 }
@@ -162,7 +178,11 @@ export async function setPaymentStatus(fd: FormData) {
 export async function setAmountOverride(fd: FormData) {
   await requireAdmin();
   const id = str(fd, 'id');
-  await store.setAmountOverride(id, str(fd, 'amount') === '' ? null : money(fd, 'amount'));
+  await store.setOverrides(
+    id,
+    str(fd, 'amount') === '' ? null : money(fd, 'amount'),
+    str(fd, 'advance') === '' ? null : money(fd, 'advance'),
+  );
   revalidatePath('/', 'layout');
   redirect(`/admin?msg=amount#m-${id}`);
 }
@@ -175,6 +195,7 @@ export async function adminEditHeadcount(fd: FormData) {
   await store.updateHeadcount(id, {
     going,
     goingGuests: going ? int(fd, 'goingGuests') : 0,
+    staying: going ? str(fd, 'staying') !== 'no' : true,
     returning,
     returnGuests: returning ? int(fd, 'returnGuests') : 0,
   });
