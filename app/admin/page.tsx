@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requireAdmin } from '@/lib/auth';
 import { readDb, type Member, type Settings } from '@/lib/db';
 import { calculatedAdvance, calculatedAmount, groupSizes, paySummary, PAY_STATE_LABEL, rs, totals } from '@/lib/calc';
+import Overview from './Overview';
 import {
   adminLogout, saveSettings, receivePayment, rejectSlip, setAmountOverride, adminEditHeadcount, resetPin, deleteMember,
 } from '../actions';
@@ -94,33 +95,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
       <main className="wrap wide">
         {note && <div className={`alert ${note[0]}`} role="status">{note[1]}</div>}
 
-        <section className="stats" aria-label="Totals">
-          <div className="stat primary">
-            <span className="label">{s.goingLabel}</span>
-            <span className="big">{goingTotal}</span>
-            <span className="muted">{t.going.members} members + {t.going.others} others</span>
-          </div>
-          <div className="stat primary">
-            <span className="label">{s.stayLabel}</span>
-            <span className="big">{stayTotal}</span>
-            <span className="muted">
-              {t.stay.members} members + {t.stay.others} others
-              {stayTotal < goingTotal && ` · ${goingTotal - stayTotal} staying elsewhere`}
-            </span>
-          </div>
-          <div className="stat primary">
-            <span className="label">{s.returnLabel}</span>
-            <span className="big">{retTotal}</span>
-            <span className="muted">{t.ret.members} members + {t.ret.others} others</span>
-          </div>
-          <div className="stat">
-            <span className="label">Money received</span>
-            <span className="big" style={{ fontSize: '1.5rem' }}>{rs(t.received)}</span>
-            <span className="muted">
-              of {rs(t.expected)} full price · advances {rs(t.advanceExpected)} · {t.toCheck} slip{t.toCheck === 1 ? '' : 's'} to check
-            </span>
-          </div>
-        </section>
+        <Overview members={members} settings={s} money={{ received: t.received, expected: t.expected, toCheck: t.toCheck }} />
 
         <section className="card" id="counts">
           <div className="card-head">
