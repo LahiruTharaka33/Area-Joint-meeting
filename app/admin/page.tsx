@@ -17,8 +17,8 @@ const MESSAGES: Record<string, [string, string]> = {
   badanswer: ['error', 'Choose Yes or No for both buses before saving.'],
   pin: ['ok', 'PIN reset. Tell the member their new PIN.'],
   badpin: ['error', 'PIN must be 4 to 6 digits.'],
-  deleted: ['ok', 'Member removed.'],
-  noconfirm: ['error', 'Type DELETE in the box to remove a member.'],
+  deleted: ['ok', 'Member deleted.'],
+  noconfirm: ['error', 'The member was not deleted. Please try again.'],
 };
 
 const FILTERS = [
@@ -53,9 +53,9 @@ function payPill(m: Member, s: Settings): [string, string] {
   return ['none', PAY_STATE_LABEL[p.state]];
 }
 
-export default async function Admin({ searchParams }: { searchParams: Promise<{ msg?: string; f?: string; edit?: string }> }) {
+export default async function Admin({ searchParams }: { searchParams: Promise<{ msg?: string; f?: string; edit?: string; del?: string }> }) {
   await requireAdmin();
-  const { msg, f = 'all', edit } = await searchParams;
+  const { msg, f = 'all', edit, del } = await searchParams;
   const { settings: s, members } = await readDb();
   const t = totals(members, s);
   const goingTotal = t.going.members + t.going.others;
@@ -76,6 +76,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
   }
   const clubs = [...clubMap.values()].sort((a, b) => a.club.localeCompare(b.club));
   const note = msg ? MESSAGES[msg] : undefined;
+  const toDelete = del ? members.find(m => m.id === del) : undefined;
 
   return (
     <>
@@ -95,6 +96,29 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
 
       <main className="wrap wide">
         {note && <div className={`alert ${note[0]}`} role="status">{note[1]}</div>}
+
+        {toDelete && (
+          <section className="card confirm-delete" id="confirm-delete" role="alertdialog" aria-labelledby="cd-title">
+            <h2 id="cd-title">Delete {toDelete.name}?</h2>
+            <p>
+              {toDelete.club} · {toDelete.phone}
+              {toDelete.going !== null && <> · Going {groupSizes(toDelete).going} · Back {groupSizes(toDelete).ret}</>}
+            </p>
+            <p className="muted">
+              This removes the member, their answers and their uploaded slips
+              {toDelete.paidAmount > 0 && <strong> (they have paid {rs(toDelete.paidAmount)})</strong>}.
+              It can&apos;t be undone. They can register again later with the same phone number.
+            </p>
+            <div className="row-actions">
+              <form action={deleteMember}>
+                <input type="hidden" name="id" value={toDelete.id} />
+                <input type="hidden" name="confirm" value="DELETE" />
+                <button className="btn danger">Yes, delete</button>
+              </form>
+              <Link className="btn ghost" href="/admin">Cancel</Link>
+            </div>
+          </section>
+        )}
 
         <Overview members={members} settings={s} money={{ received: t.received, expected: t.expected, toCheck: t.toCheck }} />
 
@@ -131,7 +155,10 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
                         <td>
                           <a href={`/admin?edit=${m.id}#m-${m.id}`}>{m.name}</a>
                           <div className="muted small">{m.phone}</div>
-                          <a className="btn ghost sm edit-link" href={`/admin?edit=${m.id}#m-${m.id}`}>Edit</a>
+                          <div className="row-actions">
+                            <a className="btn ghost sm edit-link" href={`/admin?edit=${m.id}#m-${m.id}`}>Edit</a>
+                            <a className="btn ghost sm edit-link danger-link" href={`/admin?del=${m.id}#confirm-delete`}>Delete</a>
+                          </div>
                         </td>
                         <td>{m.club}</td>
                         {m.going === null ? (
@@ -381,11 +408,9 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
                       <button className="btn ghost sm">Reset PIN</button>
                     </form>
 
-                    <form action={deleteMember} className="inline-form">
-                      <input type="hidden" name="id" value={m.id} />
-                      <label className="field">Remove member <span className="hint">Type DELETE to confirm</span><input name="confirm" type="text" autoComplete="off" /></label>
-                      <button className="btn danger sm">Remove</button>
-                    </form>
+                    <div>
+                      <a className="btn danger sm" href={`/admin?del=${m.id}#confirm-delete`}>Delete member</a>
+                    </div>
                   </div>
                 </details>
               );
