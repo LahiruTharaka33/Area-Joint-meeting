@@ -13,7 +13,8 @@ const MESSAGES: Record<string, [string, string]> = {
   settings: ['ok', 'Payment details saved.'],
   payment: ['ok', 'Payment updated.'],
   amount: ['ok', 'Price updated.'],
-  headcount: ['ok', 'Headcount updated.'],
+  headcount: ['ok', 'Answers saved. The counts and price are updated.'],
+  badanswer: ['error', 'Choose Yes or No for both buses before saving.'],
   pin: ['ok', 'PIN reset. Tell the member their new PIN.'],
   badpin: ['error', 'PIN must be 4 to 6 digits.'],
   deleted: ['ok', 'Member removed.'],
@@ -52,9 +53,9 @@ function payPill(m: Member, s: Settings): [string, string] {
   return ['none', PAY_STATE_LABEL[p.state]];
 }
 
-export default async function Admin({ searchParams }: { searchParams: Promise<{ msg?: string; f?: string }> }) {
+export default async function Admin({ searchParams }: { searchParams: Promise<{ msg?: string; f?: string; edit?: string }> }) {
   await requireAdmin();
-  const { msg, f = 'all' } = await searchParams;
+  const { msg, f = 'all', edit } = await searchParams;
   const { settings: s, members } = await readDb();
   const t = totals(members, s);
   const goingTotal = t.going.members + t.going.others;
@@ -127,7 +128,11 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
                     const [cls, label] = payPill(m, s);
                     return (
                       <tr key={m.id}>
-                        <td><a href={`#m-${m.id}`}>{m.name}</a><div className="muted small">{m.phone}</div></td>
+                        <td>
+                          <a href={`/admin?edit=${m.id}#m-${m.id}`}>{m.name}</a>
+                          <div className="muted small">{m.phone}</div>
+                          <a className="btn ghost sm edit-link" href={`/admin?edit=${m.id}#m-${m.id}`}>Edit</a>
+                        </td>
                         <td>{m.club}</td>
                         {m.going === null ? (
                           <td colSpan={3} className="muted">No answer yet</td>
@@ -260,7 +265,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
               const [cls, label] = payPill(m, s);
               const suggested = p.paid < p.advance ? p.advance : p.full;
               return (
-                <details className="card member" key={m.id} id={`m-${m.id}`}>
+                <details className="card member" key={m.id} id={`m-${m.id}`} open={edit === m.id}>
                   <summary>
                     <span className="who">{m.name} <span className="muted small">· {m.club}</span></span>
                     <span className={`pill ${cls}`}>{label}</span>
@@ -277,6 +282,41 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
                       Phone: <strong>{m.phone}</strong>
                       {m.updatedAt && <span className="muted"> · updated {new Date(m.updatedAt).toLocaleString('en-GB')}</span>}
                     </p>
+
+                    <form action={adminEditHeadcount} className="q edit-answers">
+                      <input type="hidden" name="id" value={m.id} />
+                      <div className="q-title">Edit {m.name.split(' ')[0]}&apos;s answers</div>
+                      <p className="muted small">
+                        Changes the member&apos;s headcount for them. Works even when the headcount is closed.
+                        Counts don&apos;t include the member, they are always counted as 1.
+                      </p>
+                      <div className="edit-grid">
+                        <label className="field">Going on the {s.goingLabel}?
+                          <select name="going" required defaultValue={m.going === null ? '' : m.going ? 'yes' : 'no'}>
+                            {m.going === null && <option value="" disabled>Choose…</option>}
+                            <option value="yes">Yes</option><option value="no">No</option>
+                          </select>
+                        </label>
+                        <label className="field">People with them (going)
+                          <input name="goingGuests" type="number" min="0" max="30" inputMode="numeric" defaultValue={m.goingGuests} />
+                        </label>
+                        <label className="field">Staying at the booked place?
+                          <select name="staying" defaultValue={m.staying ? 'yes' : 'no'}>
+                            <option value="yes">Yes</option><option value="no">No, staying elsewhere</option>
+                          </select>
+                        </label>
+                        <label className="field">Coming back on the {s.returnLabel}?
+                          <select name="returning" required defaultValue={m.returning === null ? '' : m.returning ? 'yes' : 'no'}>
+                            {m.returning === null && <option value="" disabled>Choose…</option>}
+                            <option value="yes">Yes</option><option value="no">No</option>
+                          </select>
+                        </label>
+                        <label className="field">People with them (coming back)
+                          <input name="returnGuests" type="number" min="0" max="30" inputMode="numeric" defaultValue={m.returnGuests} />
+                        </label>
+                      </div>
+                      <button className="btn sm">Save answers</button>
+                    </form>
 
                     {p.full > 0 && (
                       <div className="money small">
@@ -333,22 +373,6 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
                         <input name="advance" type="number" min="0" step="any" inputMode="decimal" defaultValue={m.advanceOverride ?? ''} />
                       </label>
                       <button className="btn ghost sm">Save prices</button>
-                    </form>
-
-                    <form action={adminEditHeadcount} className="inline-form">
-                      <input type="hidden" name="id" value={m.id} />
-                      <label className="field">Going?
-                        <select name="going" defaultValue={m.going ? 'yes' : 'no'}><option value="yes">Yes</option><option value="no">No</option></select>
-                      </label>
-                      <label className="field">+ people going<input name="goingGuests" type="number" min="0" max="30" defaultValue={m.goingGuests} /></label>
-                      <label className="field">Staying at booked place?
-                        <select name="staying" defaultValue={m.staying ? 'yes' : 'no'}><option value="yes">Yes</option><option value="no">No</option></select>
-                      </label>
-                      <label className="field">Coming back?
-                        <select name="returning" defaultValue={m.returning ? 'yes' : 'no'}><option value="yes">Yes</option><option value="no">No</option></select>
-                      </label>
-                      <label className="field">+ people back<input name="returnGuests" type="number" min="0" max="30" defaultValue={m.returnGuests} /></label>
-                      <button className="btn ghost sm">Save headcount</button>
                     </form>
 
                     <form action={resetPin} className="inline-form">

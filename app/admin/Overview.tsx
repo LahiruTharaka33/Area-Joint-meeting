@@ -252,7 +252,7 @@ export default function Overview({ members, settings: s, money }: {
               <tbody>
                 {st.withFamily.map(({ m }) => (
                   <tr key={m.id}>
-                    <td><a href={`#m-${m.id}`}>{m.name}</a><div className="muted small">{m.phone}</div></td>
+                    <td><a href={`/admin?edit=${m.id}#m-${m.id}`}>{m.name}</a><div className="muted small">{m.phone}</div></td>
                     <td>{m.club}</td>
                     <td className="num">{m.going ? `1 + ${m.goingGuests}` : '–'}</td>
                     <td className="num">{m.going && m.staying ? `1 + ${m.goingGuests}` : m.going ? 'elsewhere' : '–'}</td>

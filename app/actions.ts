@@ -190,8 +190,13 @@ export async function setAmountOverride(fd: FormData) {
 export async function adminEditHeadcount(fd: FormData) {
   await requireAdmin();
   const id = str(fd, 'id');
-  const going = str(fd, 'going') === 'yes';
-  const returning = str(fd, 'returning') === 'yes';
+  const goingRaw = str(fd, 'going');
+  const returningRaw = str(fd, 'returning');
+  if (!['yes', 'no'].includes(goingRaw) || !['yes', 'no'].includes(returningRaw)) {
+    redirect(`/admin?msg=badanswer&edit=${id}#m-${id}`);
+  }
+  const going = goingRaw === 'yes';
+  const returning = returningRaw === 'yes';
   await store.updateHeadcount(id, {
     going,
     goingGuests: going ? int(fd, 'goingGuests') : 0,
@@ -200,7 +205,7 @@ export async function adminEditHeadcount(fd: FormData) {
     returnGuests: returning ? int(fd, 'returnGuests') : 0,
   });
   revalidatePath('/', 'layout');
-  redirect(`/admin?msg=headcount#m-${id}`);
+  redirect(`/admin?msg=headcount&edit=${id}#m-${id}`);
 }
 
 export async function resetPin(fd: FormData) {
